@@ -1,12 +1,11 @@
 #!/bin/bash
 
-# Script per l'installazione base di Gentoo con OpenRC, UEFI, su disco NVMe (/dev/nvme0n1).
-# Partizioni: EFI (1G), Swap (8G), Root (resto).
+# Script per l'installazione base di Gentoo con OpenRC, UEFI, su disco specificato dall'utente.
+# Partizioni: EFI (dimensione specificata dall'utente), Swap (dimensione specificata dall'utente), Root (resto).
 # Lingua e tastiera in italiano, fuso orario Europe/Rome.
 # Ispirato al Gentoo Handbook: https://wiki.gentoo.org/wiki/Handbook:AMD64
 # Esegui questo script dal live environment di Gentoo (es. minimal ISO bootata).
-# ATTENZIONE: Questo script cancellerà tutti i dati su /dev/nvme0n1! Usa con cautela.
-# (C) 2005 by Nicolini Loris r3bus77@gmail.com
+# ATTENZIONE: Questo script cancellerà tutti i dati sul disco specificato! Usa con cautela.
 
 set -e  # Esci in caso di errore
 
@@ -17,6 +16,24 @@ function messaggio {
 
 # Richiesta input utente
 messaggio "Richiesta informazioni utente"
+read -p "Inserisci il dispositivo disco (es. /dev/nvme0n1 o /dev/sda): " DISK
+echo "ATTENZIONE: Tutti i dati su $DISK verranno cancellati! Procedi solo se sicuro."
+read -p "Conferma (scrivi 'si' per continuare): " CONFIRM
+if [ "$CONFIRM" != "si" ]; then
+    echo "Installazione annullata."
+    exit 0
+fi
+
+# Determina prefisso partizioni (p per NVMe, niente per SDA)
+if [[ $DISK == *nvme* ]]; then
+    PART_PREFIX="${DISK}p"
+else
+    PART_PREFIX="${DISK}"
+fi
+
+read -p "Inserisci la dimensione per la partizione EFI (es. +1G o +512M): " EFI_SIZE
+read -p "Inserisci la dimensione per la partizione Swap (es. +8G o +16G): " SWAP_SIZE
+
 read -p "Inserisci la password per root: " -s ROOT_PASSWORD
 echo
 read -p "Inserisci il nome utente da creare: " USER_NAME
@@ -34,21 +51,21 @@ dhcpcd  # Avvia DHCP su interfacce disponibili
 ping -c 3 gentoo.org || { echo "Errore: Nessuna connessione internet. Configura la rete manualmente."; exit 1; }
 
 # Preparazione disco
-messaggio "Partizionamento disco (/dev/nvme0n1)"
-# Crea GPT: EFI (1G), Swap (8G), Root (resto)
-fdisk /dev/nvme0n1 <<EOF
+messaggio "Partizionamento disco ($DISK)"
+# Crea GPT: EFI (dimensione utente), Swap (dimensione utente), Root (resto)
+fdisk $DISK <<EOF
 g
 n
 1
 
-+1G
+$EFI_SIZE
 t
 1
 ef
 n
 2
 
-+8G
+$SWAP_SIZE
 t
 2
 82
@@ -64,20 +81,20 @@ EOF
 
 # Formattazione
 messaggio "Formattazione partizioni"
-mkfs.vfat -F 32 /dev/nvme0n1p1
-mkswap /dev/nvme0n1p2
-mkfs.ext4 /dev/nvme0n1p3
+mkfs.vfat -F 32 /dev/${PART_PREFIX}1
+mkswap /dev/${PART_PREFIX}2
+mkfs.ext4 /dev/${PART_PREFIX}3
 
 # Attivazione swap (opzionale, ma utile durante installazione)
 messaggio "Attivazione swap"
-swapon /dev/nvme0n1p2
+swapon /dev/${PART_PREFIX}2
 
 # Montaggio
 messaggio "Montaggio filesystems"
 mkdir -p /mnt/gentoo
-mount /dev/nvme0n1p3 /mnt/gentoo
+mount /dev/${PART_PREFIX}3 /mnt/gentoo
 mkdir -p /mnt/gentoo/efi
-mount /dev/nvme0n1p1 /mnt/gentoo/efi
+mount /dev/${PART_PREFIX}1 /mnt/gentoo/efi
 
 # Imposta data (usa NTP)
 messaggio "Impostazione data"
@@ -126,9 +143,9 @@ export PS1="(chroot) \$PS1"
 # Configura fstab
 messaggio "Configurazione /etc/fstab"
 blkid > /tmp/blkid_output
-EFI_UUID=\$(grep /dev/nvme0n1p1 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
-SWAP_UUID=\$(grep /dev/nvme0n1p2 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
-ROOT_UUID=\$(grep /dev/nvme0n1p3 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
+EFI_UUID=\$(grep /dev/${PART_PREFIX}1 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
+SWAP_UUID=\$(grep /dev/${PART_PREFIX}2 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
+ROOT_UUID=\$(grep /dev/${PART_PREFIX}3 /tmp/blkid_output | grep -oP 'UUID="\K[^"]+')
 
 cat <<FSTAB_EOF > /etc/fstab
 # <fs>                  <mountpoint>    <type>          <opts>          <dump/pass>
